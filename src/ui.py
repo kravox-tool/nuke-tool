@@ -8,7 +8,7 @@ import time
 
 RESET = "\x1b[0m"
 BOLD = "\x1b[1m"
-CLEAR = "\x1b[2J\x1b[H"
+CLEAR = "\x1b[H\x1b[2J\x1b[3J"          # limpia pantalla + scrollback
 
 PALETTE = ["#8B5CF6", "#A855F7", "#C084FC", "#D946EF", "#EC4899", "#F472B6", "#FB7185"]
 
@@ -19,7 +19,6 @@ def _rgb(hexcode: str):
 
 
 def fg(hexcode: str) -> str:
-    """Devuelve el codigo ANSI truecolor para un hex."""
     r, g, b = _rgb(hexcode)
     return f"\x1b[38;2;{r};{g};{b}m"
 
@@ -44,15 +43,17 @@ FALLBACK_ART = r"""
 """
 
 
+def clear() -> None:
+    sys.stdout.write(CLEAR)
+    sys.stdout.flush()
+
+
 def paint(text: str, palette=None) -> str:
     palette = palette or PALETTE
-    out = []
-    for i, ch in enumerate(text):
-        out.append(fg(palette[i % len(palette)]) + ch)
-    return "".join(out) + RESET
+    return "".join(fg(palette[i % len(palette)]) + ch for i, ch in enumerate(text)) + RESET
 
 
-def divider(width: int = 60) -> str:
+def divider(width: int = 56) -> str:
     return C.MUTED + "\u2500" * width + RESET
 
 
@@ -72,9 +73,9 @@ def _build_art() -> str:
     return FALLBACK_ART
 
 
-def print_banner(version: str = "1.0.0") -> None:
+def print_banner(version: str = "2.1.0") -> None:
     art = _build_art()
-    sys.stdout.write(CLEAR)
+    clear()
     print()
     for i, line in enumerate(art.splitlines()):
         if not line.strip():
@@ -82,12 +83,16 @@ def print_banner(version: str = "1.0.0") -> None:
         palette = PALETTE[i % 2:] + PALETTE[: i % 2]
         print("  " + paint(line, palette))
     print("  " + C.ACCENT + "Discord Server Destroyer" + RESET + C.MUTED + f"  v{version}" + RESET)
-    print("  " + divider(56))
-    print("  " + C.MUTED + "escribe " + RESET + C.BRAND + "help" + RESET
-          + C.MUTED + " para ver los comandos" + RESET + C.MUTED + " \u00b7 " + RESET
-          + C.BRAND + "exit" + RESET + C.MUTED + " para salir" + RESET)
-    print("  " + divider(56))
+    print("  " + divider())
     print()
+
+
+def header(version: str = "2.1.0") -> None:
+    """Cabecera compacta para no gastar pantalla."""
+    clear()
+    print()
+    print("  " + C.BOLD + paint("NUKE TOOL") + RESET + C.MUTED + f"  v{version}" + RESET)
+    print("  " + divider())
 
 
 def ok(msg) -> None:
@@ -117,11 +122,18 @@ def plain(msg) -> None:
 def title(text: str) -> None:
     print()
     print("  " + C.BOLD + paint(text.upper()) + RESET)
-    print("  " + divider(56))
+    print("  " + divider())
 
 
 def kv(key: str, value) -> None:
     print("  " + C.MUTED + str(key).ljust(14) + RESET + " " + C.TEXT + str(value) + RESET)
+
+
+def line(key: str, value, width: int = 18, limit: int = 40) -> None:
+    text = str(value)
+    if len(text) > limit:
+        text = text[: limit - 3] + "..."
+    print("  " + C.MUTED + str(key).replace("_", " ").ljust(width) + RESET + C.TEXT + text + RESET)
 
 
 def table_row(index, name, extra="") -> None:
@@ -130,8 +142,6 @@ def table_row(index, name, extra="") -> None:
 
 
 class Spinner:
-    """Animacion de carga en hilo aparte."""
-
     FRAMES = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
 
     def __init__(self, text: str):
