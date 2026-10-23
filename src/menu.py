@@ -1,14 +1,13 @@
 """Prompts interactivos: lectura validada, seleccion de servidor y menus."""
 from __future__ import annotations
 
-import asyncio
-
 from src import ui
 from src.modules.utils import human
+from src.terminal import term
 
 
 async def _read(prompt: str) -> str:
-    return await asyncio.to_thread(input, prompt)
+    return await term.read(prompt)
 
 
 def _label(prompt: str, default=None, optional: bool = False, suffix: str = "") -> str:
@@ -21,8 +20,7 @@ def _label(prompt: str, default=None, optional: bool = False, suffix: str = "") 
             + ui.C.MUTED + hint + suffix + ui.RESET + " " + ui.C.BRAND + "\u276f " + ui.RESET)
 
 
-async def ask(prompt: str, default=None, optional: bool = False) -> str | None:
-    """Pide un texto. Enter = default. Si optional, Enter o '-' devuelven None."""
+async def ask(prompt: str, default=None, optional: bool = False):
     while True:
         raw = (await _read(_label(prompt, default, optional))).strip()
         if raw in ("", "-"):
@@ -36,7 +34,7 @@ async def ask(prompt: str, default=None, optional: bool = False) -> str | None:
 
 
 async def ask_int(prompt: str, default: int, minimum: int, maximum: int,
-                  optional: bool = False) -> int | None:
+                  optional: bool = False):
     while True:
         raw = (await _read(_label(f"{prompt} ({minimum}-{maximum})", default, optional))).strip()
         if raw in ("", "-"):
@@ -71,7 +69,6 @@ async def read_line(prompt: str, default=None) -> str:
 
 
 async def choose_guild(client, current_id=None, title: str = "Selecciona un servidor"):
-    """Muestra la lista numerada de servidores y devuelve el elegido."""
     guilds = list(client.guilds)
     if not guilds:
         ui.error("El bot no esta en ningun servidor.")
@@ -97,7 +94,6 @@ async def choose_guild(client, current_id=None, title: str = "Selecciona un serv
 
 
 async def choose_channel(guild, kind: str = "text", limit: int = 25):
-    """Lista canales numerados y devuelve el elegido."""
     import discord
 
     channels = [c for c in guild.channels if c.type == (
