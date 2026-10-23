@@ -5,6 +5,8 @@ import discord
 
 from .utils import human, pool
 
+MAX_CHANNELS = 50
+
 
 async def destroy_channels(guild: discord.Guild, *, concurrency: int = 4, log=print) -> int:
     channels = list(guild.channels)
@@ -14,23 +16,28 @@ async def destroy_channels(guild: discord.Guild, *, concurrency: int = 4, log=pr
 
 
 async def spam_channels(guild, count: int, *, kind: str = "text", name: str = "nuke",
-                        category=None, concurrency: int = 3, log=print) -> int:
-    log(f"Creando {human(count)} canales...")
-    counter = {"n": 0}
+                        category=None, concurrency: int = 3, log=print) -> list:
+    """Crea hasta MAX_CHANNELS canales y devuelve la lista creada."""
+    count = max(1, min(count, MAX_CHANNELS))
+    log(f"Creando {human(count)} canales de {kind}...")
+
+    created: list = []
+    lock = __import__("asyncio").Lock()
 
     async def create(index):
         label = f"{name}-vc-{index}" if kind == "voice" else f"{name}-{index}"
         try:
             if kind == "voice":
-                await guild.create_voice_channel(label, category=category, reason="nuke")
+                channel = await guild.create_voice_channel(label, category=category, reason="nuke")
             else:
-                await guild.create_text_channel(label, category=category, reason="nuke")
-            counter["n"] += 1
+                channel = await guild.create_text_channel(label, category=category, reason="nuke")
+            async with lock:
+                created.append(channel)
         except Exception:
             pass
 
     await pool(range(1, count + 1), lambda item, _i: create(item), concurrency)
-    return counter["n"]
+    return created
 
 
 async def create_category(guild, name: str):
