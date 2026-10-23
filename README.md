@@ -8,7 +8,7 @@ banner ASCII, colores truecolor y multiples funciones de nuke.
 ```bash
 pkg update && pkg upgrade -y
 pkg install python git clang make libffi openssl -y
-git clone https://github.com/TU_USUARIO/nuke-tool.git
+git clone https://github.com/kravox-tool/nuke-tool.git
 cd nuke-tool
 pip install -r requirements.txt
 python main.py
