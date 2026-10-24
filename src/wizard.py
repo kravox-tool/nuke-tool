@@ -7,7 +7,6 @@ MAX_CHANNELS = 50
 
 
 async def nuke_wizard(client, guild) -> dict | None:
-    """Pide toda la personalizacion del nuke y devuelve las opciones."""
     ui.title("Asistente de NUKE")
     ui.kv("Servidor", f"{guild.name}  ({guild.id})")
     ui.plain("Enter acepta el valor por defecto.")
@@ -23,7 +22,7 @@ async def nuke_wizard(client, guild) -> dict | None:
 
     icon = await menu.ask(
         "3/9  Foto del servidor (ruta o URL)", optional=True)
-    options["icon"] = icon
+    options["icon"] = icon or ""
 
     options["spam_message"] = await menu.ask(
         "4/9  Mensaje de spam", default="Nuked.")
@@ -49,7 +48,8 @@ async def nuke_wizard(client, guild) -> dict | None:
     print()
     ui.title("Resumen")
     ui.kv("Servidor", options["guild_name"])
-    ui.kv("Canales", options["channel_name"] + "-1 ... " + options["channel_name"] + f"-{channels_count}")
+    ui.kv("Canales", options["channel_name"] + "-1 ... " + options["channel_name"]
+                        + f"-{channels_count}")
     ui.kv("Voz", options["voice_count"])
     ui.kv("Foto", icon or "sin cambios")
     ui.kv("Spam", f'"{options["spam_message"]}" x{options["spam_times"]}'
@@ -63,7 +63,6 @@ async def nuke_wizard(client, guild) -> dict | None:
 
 
 async def spam_wizard(guild) -> dict | None:
-    """Asistente del spam de mensajes."""
     ui.title("Asistente de SPAM")
     ui.kv("Servidor", guild.name)
     print()
@@ -84,3 +83,28 @@ async def spam_wizard(guild) -> dict | None:
     if not await menu.ask_bool("Enviar", default=True):
         return None
     return {"channel": channel, "message": message, "times": times}
+
+
+async def dm_wizard(guild) -> dict | None:
+    """Asistente del DM masivo: mensaje, repeticiones y limite de miembros."""
+    ui.title("Asistente de DM masivo")
+    ui.kv("Servidor", guild.name)
+    print()
+
+    message = await menu.ask("Mensaje a enviar", default="Nuked.")
+
+    times = await menu.ask_int(
+        "Cuantas veces se envia a cada miembro", default=1, minimum=1, maximum=20)
+
+    limit = await menu.ask_int(
+        "Limite de miembros (0 = todos)", default=0, minimum=0, maximum=10000)
+
+    print()
+    ui.kv("Mensaje", message)
+    ui.kv("Por miembro", times)
+    ui.kv("Miembros", limit or "todos")
+    print()
+
+    if not await menu.ask_bool("Enviar los DMs", default=True):
+        return None
+    return {"message": message, "times": times, "limit": limit}
