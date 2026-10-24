@@ -81,11 +81,12 @@ async def choose_guild(client, current_id=None, title: str = "Selecciona un serv
         if str(guild.id) == str(current_id):
             current_index = i
         mark = ui.C.OK + "   \u25c0 actual" + ui.RESET if str(guild.id) == str(current_id) else ""
-        ui.table_row(i, guild.name, f"   ({human(guild.member_count or 0)} miembros)" + mark)
+        ui.table_row(f"{i:02d}", guild.name,
+                     f"   ({human(guild.member_count or 0)} miembros)" + mark)
     print()
 
     while True:
-        raw = (await _read(_label("Numero de servidor", current_index))).strip()
+        raw = (await _read(_label("Numero de servidor", f"{current_index:02d}" if current_index else None))).strip()
         if raw == "" and current_index:
             return guilds[current_index - 1]
         if raw.isdigit() and 1 <= int(raw) <= len(guilds):
@@ -106,11 +107,11 @@ async def choose_channel(guild, kind: str = "text", limit: int = 25):
     print()
     ui.title(f"Canales de {kind}")
     for i, channel in enumerate(channels, start=1):
-        ui.table_row(i, "#" + channel.name)
+        ui.table_row(f"{i:02d}", "#" + channel.name)
     print()
 
     while True:
-        raw = (await _read(_label("Numero de canal", 1))).strip() or "1"
+        raw = (await _read(_label("Numero de canal", "01"))).strip() or "1"
         if raw.isdigit() and 1 <= int(raw) <= len(channels):
             return channels[int(raw) - 1]
         ui.warn(f"Escribe un numero entre 1 y {len(channels)}.")
