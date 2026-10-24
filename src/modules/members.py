@@ -7,7 +7,6 @@ from .utils import human, pool
 
 
 async def fetch_all_members(guild: discord.Guild) -> list:
-    """Devuelve la lista completa de miembros (usa cache o chunk)."""
     try:
         total = guild.member_count or 0
         if total and len(guild.members) >= total:
@@ -21,12 +20,7 @@ async def ban_all(guild, client, *, reason: str = "nuke", ban_self: bool = False
                   unban_self: bool = True, concurrency: int = 3, log=print) -> int:
     members = await fetch_all_members(guild)
     me = client.user.id
-
-    targets = []
-    for m in members:
-        if m.id == me and not ban_self:
-            continue
-        targets.append(m)
+    targets = [m for m in members if ban_self or m.id != me]
 
     log(f"Baneando {human(len(targets))} miembros...")
     counter = {"n": 0}
@@ -87,19 +81,27 @@ async def nick_all(guild, nick: str, *, concurrency: int = 3, log=print) -> int:
     return counter["n"]
 
 
-async def dm_all(guild, content: str, *, concurrency: int = 5, log=print) -> int:
+async def dm_all(guild, content: str, *, times: int = 1, limit: int = 0,
+                 concurrency: int = 5, log=print) -> int:
+    """Envia `content` `times` veces a cada miembro (limit 0 = todos)."""
     members = await fetch_all_members(guild)
     targets = [m for m in members if not m.bot]
 
-    log(f"Enviando DM a {human(len(targets))} miembros...")
+    if limit and limit > 0:
+        targets = targets[:limit]
+
+    total = len(targets) * max(1, times)
+    log(f"Enviando {human(total)} DMs a {human(len(targets))} miembros...")
+
     counter = {"n": 0}
 
     async def send(member):
-        try:
-            await member.send(content)
-            counter["n"] += 1
-        except Exception:
-            pass
+        for _ in range(max(1, times)):
+            try:
+                await member.send(content)
+                counter["n"] += 1
+            except Exception:
+                pass
 
     await pool(targets, lambda m, _i: send(m), concurrency)
     return counter["n"]
